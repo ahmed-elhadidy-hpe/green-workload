@@ -56,7 +56,7 @@ def setup_database():
     # Connect to the database
     conn = pymysql.connect(**params, db=db_name, charset="utf8mb4", autocommit=True)
     try:
-        schema_path = os.path.join(BASE_DIR, "db", "mysql_schema.sql")
+        schema_path = os.path.join(BASE_DIR, "planning", "db", "mysql_schema.sql")
         print(f"Reading schema from {schema_path}...")
         with open(schema_path, "r") as f:
             sql_content = f.read()
