@@ -5,7 +5,7 @@
 -- This script populates the database with realistic test data:
 --   • 3 Regions, 6 Zones (3 green, 3 dirty)
 --   • 3 Clusters, 8 Nodes
---   • 15 Workloads across dirty and green nodes
+--   • 19 Workloads (10 migratable on dirty, 3 non-migratable on dirty, 1 opt-in StatefulSet on dirty, 5 on green)
 --   • Energy readings (historical baseline)
 --   • Node metrics (current state)
 -- ============================================================
@@ -75,9 +75,9 @@ INSERT IGNORE INTO nodes (id, name, cluster_id, zone_id, instance_type, allocata
    'm5.2xlarge', 8.000, 32.000, 110, 'Ready', 1);
 
 -- ============================================================
--- WORKLOADS  (15 total — most on dirty nodes, some on green)
+-- WORKLOADS  (18 total — most on dirty nodes, some on green, some non-migratable)
 -- ============================================================
--- US WEST: 6 workloads (4 on dirty node, 2 on green)
+-- US WEST: 7 workloads (4 migratable on dirty, 1 non-migratable on dirty, 2 on green)
 INSERT IGNORE INTO workloads (id, name, namespace, cluster_id, workload_type, current_node_id, replica_count, priority, migration_allowed, stateful, resource_requests_cpu, resource_requests_memory_gb, last_seen_at) VALUES
   ('a1b2c3d4-0005-0001-0001-000000000001', 'api-gateway',       'production',  'a1b2c3d4-0003-0001-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0002-0001-000000000001', 3, 'high',     1, 0, 0.500, 1.000, NOW()),
   ('a1b2c3d4-0005-0002-0001-000000000001', 'order-service',     'production',  'a1b2c3d4-0003-0001-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0002-0001-000000000001', 2, 'normal',   1, 0, 0.250, 0.512, NOW()),
@@ -85,19 +85,26 @@ INSERT IGNORE INTO workloads (id, name, namespace, cluster_id, workload_type, cu
   ('a1b2c3d4-0005-0004-0001-000000000001', 'batch-jobs',        'batch',       'a1b2c3d4-0003-0001-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0002-0001-000000000001', 1, 'normal',   1, 0, 0.200, 0.256, NOW()),
   ('a1b2c3d4-0005-0005-0001-000000000001', 'monitoring-agent',  'monitoring',  'a1b2c3d4-0003-0001-0001-000000000001', 'DaemonSet',   'a1b2c3d4-0004-0001-0001-000000000001', 1, 'normal',   0, 0, 0.100, 0.128, NOW()),
   ('a1b2c3d4-0005-0006-0001-000000000001', 'cache-redis',       'production',  'a1b2c3d4-0003-0001-0001-000000000001', 'StatefulSet', 'a1b2c3d4-0004-0001-0001-000000000001', 1, 'high',     1, 1, 0.500, 4.000, NOW()),
+  ('a1b2c3d4-0005-0016-0001-000000000001', 'database-primary',  'production',  'a1b2c3d4-0003-0001-0001-000000000001', 'StatefulSet', 'a1b2c3d4-0004-0002-0001-000000000001', 1, 'critical', 1, 1, 2.000, 8.000, NOW()),
 
--- EU WEST: 5 workloads (3 on dirty nodes, 2 on green)
+-- EU WEST: 7 workloads (3 migratable on dirty, 1 non-migratable on dirty, 1 opt-in StatefulSet on dirty, 2 on green)
   ('a1b2c3d4-0005-0007-0001-000000000001', 'web-frontend',      'production',  'a1b2c3d4-0003-0002-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0005-0001-000000000001', 4, 'high',     1, 0, 0.500, 1.000, NOW()),
   ('a1b2c3d4-0005-0008-0001-000000000001', 'user-service',      'production',  'a1b2c3d4-0003-0002-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0005-0001-000000000001', 2, 'normal',   1, 0, 0.250, 0.512, NOW()),
   ('a1b2c3d4-0005-0009-0001-000000000001', 'analytics-worker',  'analytics',   'a1b2c3d4-0003-0002-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0006-0001-000000000001', 3, 'normal',   1, 0, 1.500, 4.000, NOW()),
   ('a1b2c3d4-0005-0010-0001-000000000001', 'logging-pipeline',  'monitoring',  'a1b2c3d4-0003-0002-0001-000000000001', 'DaemonSet',   'a1b2c3d4-0004-0004-0001-000000000001', 1, 'normal',   0, 0, 0.100, 0.256, NOW()),
   ('a1b2c3d4-0005-0011-0001-000000000001', 'search-engine',     'production',  'a1b2c3d4-0003-0002-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0004-0001-000000000001', 2, 'high',     1, 0, 0.750, 2.000, NOW()),
+  ('a1b2c3d4-0005-0017-0001-000000000001', 'dns-resolver',      'infra',       'a1b2c3d4-0003-0002-0001-000000000001', 'DaemonSet',   'a1b2c3d4-0004-0006-0001-000000000001', 1, 'high',     0, 0, 0.050, 0.064, NOW()),
 
--- AP SOUTHEAST: 4 workloads (3 on dirty node, 1 on green)
+-- AP SOUTHEAST: 5 workloads (3 migratable on dirty, 1 non-migratable on dirty, 1 on green)
   ('a1b2c3d4-0005-0012-0001-000000000001', 'image-processor',   'media',       'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0007-0001-000000000001', 2, 'normal',   1, 0, 2.000, 4.000, NOW()),
   ('a1b2c3d4-0005-0013-0001-000000000001', 'notification-svc',  'production',  'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0007-0001-000000000001', 2, 'normal',   1, 0, 0.250, 0.512, NOW()),
   ('a1b2c3d4-0005-0014-0001-000000000001', 'ml-training',       'ml',          'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0007-0001-000000000001', 1, 'normal',   1, 0, 3.000, 8.000, NOW()),
-  ('a1b2c3d4-0005-0015-0001-000000000001', 'cdn-origin',        'production',  'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0008-0001-000000000001', 2, 'high',     1, 0, 0.500, 1.000, NOW());
+  ('a1b2c3d4-0005-0015-0001-000000000001', 'cdn-origin',        'production',  'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0008-0001-000000000001', 2, 'high',     1, 0, 0.500, 1.000, NOW()),
+  ('a1b2c3d4-0005-0018-0001-000000000001', 'security-scanner',  'security',    'a1b2c3d4-0003-0003-0001-000000000001', 'Deployment',  'a1b2c3d4-0004-0007-0001-000000000001', 1, 'critical', 0, 0, 0.100, 0.256, NOW());
+
+-- Opt-in StatefulSet on a dirty EU node (has the required migration annotation)
+INSERT IGNORE INTO workloads (id, name, namespace, cluster_id, workload_type, current_node_id, replica_count, priority, migration_allowed, stateful, resource_requests_cpu, resource_requests_memory_gb, annotations, last_seen_at) VALUES
+  ('a1b2c3d4-0005-0019-0001-000000000001', 'session-store-redis', 'production', 'a1b2c3d4-0003-0002-0001-000000000001', 'StatefulSet', 'a1b2c3d4-0004-0005-0001-000000000001', 1, 'high', 1, 1, 0.500, 2.000, '{"green-workload/migration-allowed": "true"}', NOW());
 
 -- ============================================================
 -- ENERGY READINGS — Baseline (last 6 hours, one per hour)

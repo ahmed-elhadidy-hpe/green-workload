@@ -77,13 +77,7 @@ class GreenWorkloadAgent:
 
             # 2. Call LLM
             decision = await self._call_llm(energy_status, topology, workloads, history)
-            log.info(
-                "LLM decision response",
-                decision_type=decision.get("decision_type"),
-                reasoning=decision.get("reasoning"),
-                actions=decision.get("actions", []),
-            )
-
+            
             # 3. Record decision
             decision_id = self.repo.record_ai_decision(
                 agent_run_id=run_id,
@@ -170,13 +164,13 @@ class GreenWorkloadAgent:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=4096,
             )
             raw = response.choices[0].message.content or ""
 
             # Log full LLM response
             usage = response.usage
-            log.info(
+            log.debug(
                 "LLM response received",
                 model=response.model,
                 finish_reason=response.choices[0].finish_reason,
@@ -187,7 +181,8 @@ class GreenWorkloadAgent:
             )
             log.info("LLM raw response", raw_response=raw)
 
-            decision = self._parse_llm_response(raw)
+            finish_reason = response.choices[0].finish_reason
+            decision = self._parse_llm_response(raw, truncated=(finish_reason == "length"))
 
             log.info(
                 "LLM decision parsed",
@@ -218,8 +213,12 @@ class GreenWorkloadAgent:
             )
             return decision
 
-    def _parse_llm_response(self, raw: str) -> dict:
-        """Extract and parse JSON from the LLM response."""
+    def _parse_llm_response(self, raw: str, truncated: bool = False) -> dict:
+        """Extract and parse JSON from the LLM response.
+        
+        If truncated=True (finish_reason was 'length'), attempt to repair
+        the JSON by closing open arrays/objects.
+        """
         raw = raw.strip()
         # Strip markdown code fences if present
         if raw.startswith("```"):
@@ -245,6 +244,19 @@ class GreenWorkloadAgent:
                     return parsed
                 except json.JSONDecodeError:
                     pass
+
+            # If response was truncated, try to repair by closing brackets
+            if truncated and start != -1:
+                fragment = raw[start:]
+                repaired = self._repair_truncated_json(fragment)
+                if repaired:
+                    log.info(
+                        "Repaired truncated LLM JSON response",
+                        original_len=len(fragment),
+                        actions_recovered=len(repaired.get("actions", [])),
+                    )
+                    return repaired
+
             log.warning(
                 "Could not parse LLM response as JSON, returning skip",
                 raw_response=raw[:500],
@@ -254,6 +266,28 @@ class GreenWorkloadAgent:
                 "reasoning": "Could not parse LLM response",
                 "actions": [],
             }
+
+    @staticmethod
+    def _repair_truncated_json(fragment: str) -> dict | None:
+        """Try to repair a truncated JSON response by progressively
+        removing trailing incomplete elements and closing brackets."""
+        # Try closing with increasingly aggressive truncation
+        for trim_chars in [0, 1, 5, 50, 200, 500, 1000]:
+            candidate = fragment if trim_chars == 0 else fragment[:-trim_chars]
+            # Count open/close brackets
+            open_braces = candidate.count("{") - candidate.count("}")
+            open_brackets = candidate.count("[") - candidate.count("]")
+            # Remove any trailing comma after trimming
+            candidate = candidate.rstrip().rstrip(",")
+            # Close the open brackets
+            candidate += "]" * open_brackets + "}" * open_braces
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict) and "decision_type" in parsed:
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        return None
 
     def _rule_based_fallback(
         self, energy_status: dict, topology: dict, workloads: list

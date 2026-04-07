@@ -188,7 +188,15 @@ class GreenWorkloadRepository:
     # ------------------------------------------------------------------
 
     def get_migratable_workloads(self, cluster_id: Optional[str] = None) -> list[dict]:
-        """Get workloads on non-green zones eligible for migration."""
+        """Get workloads on non-green zones eligible for migration.
+
+        Excludes:
+        - workloads with migration_allowed = 0
+        - workloads already on green zones
+        - StatefulSets without the opt-in annotation
+          'green-workload/migration-allowed: true'
+        - DaemonSets (cannot be migrated by design)
+        """
         try:
             with get_db() as db:
                 cluster_filter = "AND w.cluster_id = :cluster_id" if cluster_id else ""
@@ -213,12 +221,33 @@ class GreenWorkloadRepository:
                         )
                         WHERE w.migration_allowed = 1
                           AND (e.is_green = 0 OR e.is_green IS NULL)
+                          AND w.workload_type != 'DaemonSet'
                           {cluster_filter}
                         ORDER BY e.carbon_intensity DESC
                     """),
                     {"cluster_id": cluster_id} if cluster_id else {},
                 ).fetchall()
-                return [dict(row._mapping) for row in rows]
+
+                results = []
+                for row in rows:
+                    wl = dict(row._mapping)
+                    # Filter out StatefulSets without the opt-in annotation
+                    if wl.get("workload_type", "").lower() == "statefulset":
+                        annotations = wl.get("annotations") or {}
+                        if isinstance(annotations, str):
+                            try:
+                                annotations = json.loads(annotations)
+                            except Exception:
+                                annotations = {}
+                        if annotations.get("green-workload/migration-allowed") != "true":
+                            log.info(
+                                "Excluding StatefulSet without opt-in annotation",
+                                workload=wl.get("workload_name"),
+                                annotations=annotations,
+                            )
+                            continue
+                    results.append(wl)
+                return results
         except Exception as e:
             log.error("get_migratable_workloads failed", error=str(e))
             return []
