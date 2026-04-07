@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     ELECTRICITY_MAPS_API_KEY: str = ""
     WATTTIME_USERNAME: str = ""
     WATTTIME_PASSWORD: str = ""
-    SCHEDULE_INTERVAL_MINUTES: int = 10
+    SCHEDULE_INTERVAL_SECONDS: int = 20
     DRY_RUN: bool = False
     LOG_LEVEL: str = "INFO"
     KUBECONFIG: str = "~/.kube/config"
@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     K8S_MCP_ARGS: str = "-m src.mcp_servers.kubernetes_mcp.server"
     DB_MCP_CMD: str = "python"
     DB_MCP_ARGS: str = "-m src.mcp_servers.internal_db.server"
+    SIMULATED_MIGRATION_EXEC_TIME_BETWEEN_SEC: tuple = (5,10)
 
     class Config:
         env_file = ".env"

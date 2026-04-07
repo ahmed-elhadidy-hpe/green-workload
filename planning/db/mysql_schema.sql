@@ -236,6 +236,35 @@ CREATE TABLE IF NOT EXISTS migration_events (
 );
 
 -- ============================================================
+-- WORKLOAD MOVEMENT LOG
+-- ============================================================
+CREATE TABLE IF NOT EXISTS workload_movement_log (
+    id                    CHAR(36)     NOT NULL DEFAULT (UUID()),
+    workload_id           CHAR(36),
+    workload_name         VARCHAR(200) NOT NULL,
+    namespace             VARCHAR(200) NOT NULL DEFAULT 'default',
+    cluster_id            CHAR(36),
+    source_node_id        CHAR(36),
+    source_node_name      VARCHAR(200),
+    destination_node_id   CHAR(36),
+    destination_node_name VARCHAR(200),
+    source_zone_name      VARCHAR(100),
+    destination_zone_name VARCHAR(100),
+    migration_event_id    CHAR(36),
+    moved_at              DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    created_at            DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    KEY idx_movement_workload (workload_id),
+    KEY idx_movement_time (moved_at DESC),
+    KEY idx_movement_migration (migration_event_id),
+    CONSTRAINT fk_movement_workload  FOREIGN KEY (workload_id)        REFERENCES workloads (id) ON DELETE SET NULL,
+    CONSTRAINT fk_movement_cluster   FOREIGN KEY (cluster_id)         REFERENCES clusters  (id) ON DELETE SET NULL,
+    CONSTRAINT fk_movement_src_node  FOREIGN KEY (source_node_id)     REFERENCES nodes     (id) ON DELETE SET NULL,
+    CONSTRAINT fk_movement_dst_node  FOREIGN KEY (destination_node_id) REFERENCES nodes    (id) ON DELETE SET NULL,
+    CONSTRAINT fk_movement_migration FOREIGN KEY (migration_event_id) REFERENCES migration_events (id) ON DELETE SET NULL
+);
+
+-- ============================================================
 -- VIEWS
 -- ============================================================
 

@@ -55,7 +55,7 @@ async def _main(args: argparse.Namespace) -> None:
     log.info(
         "Starting Green Workload AI scheduler",
         model=settings.OLLAMA_MODEL,
-        interval=settings.SCHEDULE_INTERVAL_MINUTES,
+        interval=settings.SCHEDULE_INTERVAL_SECONDS,
         dry_run=settings.DRY_RUN,
     )
     from src.scheduler.scheduler import run_scheduler_forever

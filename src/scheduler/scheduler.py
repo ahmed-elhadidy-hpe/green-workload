@@ -28,7 +28,7 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         _run_evaluation,
-        trigger=IntervalTrigger(minutes=settings.SCHEDULE_INTERVAL_MINUTES),
+        trigger=IntervalTrigger(seconds=settings.SCHEDULE_INTERVAL_SECONDS),
         id="green_workload_eval",
         name="Green Workload Evaluation",
         replace_existing=True,
@@ -43,7 +43,7 @@ async def run_scheduler_forever() -> None:
     scheduler.start()
     log.info(
         "Scheduler started",
-        interval_minutes=settings.SCHEDULE_INTERVAL_MINUTES,
+        interval_minutes=settings.SCHEDULE_INTERVAL_SECONDS,
         dry_run=settings.DRY_RUN,
     )
     # Run once immediately on startup

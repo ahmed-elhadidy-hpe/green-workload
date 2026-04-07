@@ -9,7 +9,7 @@ from sqlalchemy import text
 from src.database.connection import get_db
 from src.database.models import (
     Region, Zone, Cluster, Node, EnergyReading, NodeMetric,
-    Workload, AgentRun, AiDecision, MigrationEvent,
+    Workload, AgentRun, AiDecision, MigrationEvent, WorkloadMovementLog,
 )
 
 log = structlog.get_logger()
@@ -581,3 +581,354 @@ class GreenWorkloadRepository:
         except Exception as e:
             log.error("get_in_progress_migrations_count failed", error=str(e))
             return 0
+
+    def complete_migration(
+        self,
+        migration_id: str,
+        workload_id: str,
+        destination_node_id: str,
+        duration_seconds: int,
+    ) -> None:
+        """
+        Mark a migration as completed and update the cluster topology so
+        the workload's current_node_id points to its new destination.
+
+        Also backfills zone IDs and carbon-intensity numbers on the
+        migration_events row so the dashboard can show full details,
+        and writes a row to workload_movement_log.
+        """
+        try:
+            with get_db() as db:
+                now = datetime.utcnow()
+
+                # ── 1. Read the workload's CURRENT position (before move) ─
+                wl_row = db.execute(
+                    text(
+                        "SELECT w.id, w.name, w.namespace, w.cluster_id, "
+                        "       w.current_node_id, n.name AS node_name "
+                        "FROM workloads w "
+                        "LEFT JOIN nodes n ON w.current_node_id = n.id "
+                        "WHERE w.id = :wid"
+                    ),
+                    {"wid": workload_id},
+                ).fetchone()
+
+                if not wl_row:
+                    log.error(
+                        "complete_migration — workload not found, cannot update topology",
+                        workload_id=workload_id,
+                        migration_id=migration_id,
+                    )
+                    # Still mark the migration event as completed
+                    db.execute(
+                        text(
+                            "UPDATE migration_events "
+                            "SET status='completed', completed_at=:now, duration_seconds=:dur "
+                            "WHERE id=:mid"
+                        ),
+                        {"now": now, "dur": duration_seconds, "mid": migration_id},
+                    )
+                    return
+
+                old_node_id = wl_row[4]      # current_node_id before move
+                old_node_name = wl_row[5]     # node name before move
+                wl_name = wl_row[1]
+                wl_ns = wl_row[2]
+                wl_cluster = wl_row[3]
+
+                log.info(
+                    "complete_migration — moving workload",
+                    workload=wl_name,
+                    workload_id=workload_id,
+                    from_node_id=old_node_id,
+                    from_node=old_node_name,
+                    to_node_id=destination_node_id,
+                    migration_id=migration_id,
+                )
+
+                # ── 2. UPDATE workload to destination node ────────────
+                result = db.execute(
+                    text(
+                        "UPDATE workloads "
+                        "SET current_node_id = :dst, updated_at = :now "
+                        "WHERE id = :wid"
+                    ),
+                    {"dst": destination_node_id, "now": now, "wid": workload_id},
+                )
+                log.info(
+                    "complete_migration — workload UPDATE executed",
+                    rows_affected=result.rowcount,
+                    workload_id=workload_id,
+                    new_node_id=destination_node_id,
+                )
+
+                # ── 3. Resolve zone IDs and carbon data ───────────────
+                src_node_id = old_node_id
+                dst_node_id = destination_node_id
+
+                src_zone_id = dst_zone_id = None
+                src_zone_name = dst_zone_name = None
+                src_carbon = dst_carbon = None
+
+                if src_node_id:
+                    zrow = db.execute(
+                        text("SELECT zone_id FROM nodes WHERE id = :nid"),
+                        {"nid": src_node_id},
+                    ).fetchone()
+                    if zrow and zrow[0]:
+                        src_zone_id = zrow[0]
+                        znrow = db.execute(
+                            text("SELECT name FROM zones WHERE id = :zid"),
+                            {"zid": src_zone_id},
+                        ).fetchone()
+                        src_zone_name = znrow[0] if znrow else None
+
+                if dst_node_id:
+                    zrow = db.execute(
+                        text("SELECT zone_id FROM nodes WHERE id = :nid"),
+                        {"nid": dst_node_id},
+                    ).fetchone()
+                    if zrow and zrow[0]:
+                        dst_zone_id = zrow[0]
+                        znrow = db.execute(
+                            text("SELECT name FROM zones WHERE id = :zid"),
+                            {"zid": dst_zone_id},
+                        ).fetchone()
+                        dst_zone_name = znrow[0] if znrow else None
+
+                if src_zone_id:
+                    crow = db.execute(
+                        text(
+                            "SELECT carbon_intensity FROM energy_readings "
+                            "WHERE zone_id = :zid ORDER BY timestamp DESC LIMIT 1"
+                        ),
+                        {"zid": src_zone_id},
+                    ).fetchone()
+                    if crow:
+                        src_carbon = float(crow[0])
+
+                if dst_zone_id:
+                    crow = db.execute(
+                        text(
+                            "SELECT carbon_intensity FROM energy_readings "
+                            "WHERE zone_id = :zid ORDER BY timestamp DESC LIMIT 1"
+                        ),
+                        {"zid": dst_zone_id},
+                    ).fetchone()
+                    if crow:
+                        dst_carbon = float(crow[0])
+
+                carbon_saved = None
+                if src_carbon is not None and dst_carbon is not None:
+                    carbon_saved = round(src_carbon - dst_carbon, 3)
+
+                # Destination node name
+                dst_name_row = db.execute(
+                    text("SELECT name FROM nodes WHERE id = :nid"),
+                    {"nid": dst_node_id},
+                ).fetchone()
+                dst_node_name = dst_name_row[0] if dst_name_row else None
+
+                # ── 4. Update the migration event with full details ───
+                db.execute(
+                    text(
+                        "UPDATE migration_events SET "
+                        "  status = 'completed', "
+                        "  completed_at = :now, "
+                        "  duration_seconds = :dur, "
+                        "  source_node_id = COALESCE(source_node_id, :sn), "
+                        "  destination_node_id = COALESCE(destination_node_id, :dn), "
+                        "  source_zone_id = :sz, "
+                        "  destination_zone_id = :dz, "
+                        "  source_carbon_intensity = :sc, "
+                        "  destination_carbon_intensity = :dc, "
+                        "  carbon_savings_estimate = :cs "
+                        "WHERE id = :mid"
+                    ),
+                    {
+                        "now": now,
+                        "dur": duration_seconds,
+                        "sn": src_node_id,
+                        "dn": dst_node_id,
+                        "sz": src_zone_id,
+                        "dz": dst_zone_id,
+                        "sc": src_carbon,
+                        "dc": dst_carbon,
+                        "cs": carbon_saved,
+                        "mid": migration_id,
+                    },
+                )
+
+                # ── 5. Write movement log entry ──────────────────────
+                db.execute(
+                    text(
+                        "INSERT INTO workload_movement_log "
+                        "(id, workload_id, workload_name, namespace, cluster_id, "
+                        " source_node_id, source_node_name, "
+                        " destination_node_id, destination_node_name, "
+                        " source_zone_name, destination_zone_name, "
+                        " migration_event_id, moved_at) "
+                        "VALUES (UUID(), :wid, :wname, :ns, :cid, "
+                        " :sn, :snn, :dn, :dnn, :szn, :dzn, :mid, :now)"
+                    ),
+                    {
+                        "wid": workload_id,
+                        "wname": wl_name,
+                        "ns": wl_ns,
+                        "cid": wl_cluster,
+                        "sn": src_node_id,
+                        "snn": old_node_name,
+                        "dn": dst_node_id,
+                        "dnn": dst_node_name,
+                        "szn": src_zone_name,
+                        "dzn": dst_zone_name,
+                        "mid": migration_id,
+                        "now": now,
+                    },
+                )
+
+                # ── 6. Commit critical changes (workload move + movement log) ──
+                # Flush to DB so the critical rows are ready for commit.
+                db.flush()
+                log.info(
+                    "Movement log entry written",
+                    migration_id=migration_id,
+                    workload=wl_name,
+                )
+
+                # ── 7. Update node metrics (non-fatal, uses savepoint) ──
+                # A savepoint ensures that a metrics failure only rolls
+                # back the metrics INSERT, not the critical changes above.
+                try:
+                    nested = db.begin_nested()  # SAVEPOINT
+                    self._recompute_node_metrics(db, src_node_id, now)
+                    self._recompute_node_metrics(db, dst_node_id, now)
+                    nested.commit()
+                except Exception as e:
+                    log.warning(
+                        "Node metrics recomputation failed (non-fatal, savepoint rolled back)",
+                        error=str(e),
+                    )
+
+                log.info(
+                    "Topology updated — workload relocated",
+                    migration_id=migration_id,
+                    workload=wl_name,
+                    workload_id=workload_id,
+                    from_node=old_node_name,
+                    to_node=dst_node_name,
+                    source_zone=src_zone_name,
+                    destination_zone=dst_zone_name,
+                    carbon_saved=carbon_saved,
+                    duration_seconds=duration_seconds,
+                )
+        except Exception as e:
+            log.error(
+                "complete_migration failed",
+                migration_id=migration_id,
+                workload_id=workload_id,
+                destination_node_id=destination_node_id,
+                error=str(e),
+            )
+            raise
+
+    # ------------------------------------------------------------------
+    # Node metrics recomputation
+    # ------------------------------------------------------------------
+
+    def _recompute_node_metrics(self, db, node_id: Optional[str], now) -> None:
+        """
+        Insert a fresh node_metrics row that reflects the current workloads
+        assigned to the node.  Uses the node's allocatable capacity and
+        the sum of resource_requests from its workloads to derive
+        CPU / memory percentages and pod count.  Network figures are
+        carried over from the previous reading with a small jitter.
+        """
+        if not node_id:
+            return
+
+        # Node capacity
+        node_row = db.execute(
+            text(
+                "SELECT allocatable_cpu, allocatable_memory_gb, allocatable_pods "
+                "FROM nodes WHERE id = :nid"
+            ),
+            {"nid": node_id},
+        ).fetchone()
+        if not node_row:
+            return
+
+        alloc_cpu = float(node_row[0] or 4)
+        alloc_mem = float(node_row[1] or 16)
+
+        # Sum resource requests of all workloads currently on this node
+        usage_row = db.execute(
+            text(
+                "SELECT COALESCE(SUM(resource_requests_cpu * replica_count), 0), "
+                "       COALESCE(SUM(resource_requests_memory_gb * replica_count), 0), "
+                "       COUNT(*) "
+                "FROM workloads WHERE current_node_id = :nid"
+            ),
+            {"nid": node_id},
+        ).fetchone()
+
+        used_cpu = float(usage_row[0])
+        used_mem = float(usage_row[1])
+        pod_count = int(usage_row[2])
+
+        # Add a small base overhead (OS / kubelet / daemonsets ≈ 10%)
+        base_cpu = alloc_cpu * 0.10
+        base_mem = alloc_mem * 0.10
+        used_cpu = min(used_cpu + base_cpu, alloc_cpu)
+        used_mem = min(used_mem + base_mem, alloc_mem)
+
+        cpu_pct = round((used_cpu / alloc_cpu) * 100, 2) if alloc_cpu else 0
+        mem_pct = round((used_mem / alloc_mem) * 100, 2) if alloc_mem else 0
+
+        # Carry forward network from the latest reading (with ±5% jitter)
+        import random
+        prev = db.execute(
+            text(
+                "SELECT network_in_mbps, network_out_mbps "
+                "FROM node_metrics WHERE node_id = :nid "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ),
+            {"nid": node_id},
+        ).fetchone()
+        if prev and prev[0] is not None:
+            jitter = lambda v: round(float(v) * random.uniform(0.95, 1.05), 3)
+            net_in = jitter(prev[0])
+            net_out = jitter(prev[1])
+        else:
+            net_in = round(random.uniform(50, 200), 3)
+            net_out = round(random.uniform(30, 150), 3)
+
+        db.execute(
+            text(
+                "INSERT INTO node_metrics "
+                "(id, node_id, timestamp, cpu_usage_cores, cpu_usage_percent, "
+                " memory_usage_gb, memory_usage_percent, pod_count, "
+                " network_in_mbps, network_out_mbps) "
+                "VALUES (UUID(), :nid, :ts, :cpu_cores, :cpu_pct, "
+                " :mem_gb, :mem_pct, :pods, :net_in, :net_out)"
+            ),
+            {
+                "nid": node_id,
+                "ts": now,
+                "cpu_cores": round(used_cpu, 3),
+                "cpu_pct": cpu_pct,
+                "mem_gb": round(used_mem, 3),
+                "mem_pct": mem_pct,
+                "pods": pod_count,
+                "net_in": net_in,
+                "net_out": net_out,
+            },
+        )
+
+        log.info(
+            "Node metrics updated",
+            node_id=node_id,
+            cpu_pct=cpu_pct,
+            mem_pct=mem_pct,
+            pod_count=pod_count,
+        )

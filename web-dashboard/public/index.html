@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Green Workload AI — Dashboard</title>
+<style>
+/* ── Reset & Variables ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #0f1117;
+  --surface:   #1a1d27;
+  --surface2:  #232733;
+  --border:    #2e3345;
+  --text:      #e1e4ed;
+  --text-dim:  #8b90a0;
+  --green:     #34d399;
+  --green-bg:  #34d39918;
+  --red:       #f87171;
+  --red-bg:    #f8717118;
+  --yellow:    #fbbf24;
+  --yellow-bg: #fbbf2418;
+  --blue:      #60a5fa;
+  --blue-bg:   #60a5fa18;
+  --purple:    #a78bfa;
+  --radius:    10px;
+  --shadow:    0 2px 12px rgba(0,0,0,.35);
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 28px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+header h1 { font-size: 1.25rem; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+header h1 span { font-size: 1.4rem; }
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  font-size: .8rem; color: var(--green); font-weight: 500;
+}
+.live-dot {
+  width: 8px; height: 8px; background: var(--green); border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ── Summary Cards ─────────────────────────────────────────── */
+.summary-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px; padding: 20px 28px;
+}
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.stat-card .label { font-size: .75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; }
+.stat-card .value { font-size: 1.6rem; font-weight: 700; }
+.stat-card.green  .value { color: var(--green); }
+.stat-card.red    .value { color: var(--red); }
+.stat-card.blue   .value { color: var(--blue); }
+.stat-card.yellow .value { color: var(--yellow); }
+.stat-card.purple .value { color: var(--purple); }
+
+/* ── Tabs ──────────────────────────────────────────────────── */
+.tabs {
+  display: flex; gap: 0; padding: 0 28px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  padding: 12px 24px; cursor: pointer;
+  font-size: .85rem; font-weight: 500; color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+  transition: all .2s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--green); border-bottom-color: var(--green); }
+.tab-panel { display: none; padding: 20px 28px; }
+.tab-panel.active { display: block; }
+
+/* ── Tables ────────────────────────────────────────────────── */
+.table-wrap {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+thead { background: var(--surface2); }
+th { padding: 12px 14px; text-align: left; font-weight: 600; color: var(--text-dim);
+     font-size: .72rem; text-transform: uppercase; letter-spacing: .5px;
+     border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--surface2); }
+
+/* ── Badges ────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px;
+  font-size: .75rem; font-weight: 600; white-space: nowrap;
+}
+.badge-completed { background: var(--green-bg); color: var(--green); }
+.badge-in_progress { background: var(--blue-bg); color: var(--blue); }
+.badge-pending   { background: var(--yellow-bg); color: var(--yellow); }
+.badge-failed    { background: var(--red-bg); color: var(--red); }
+.badge-green     { background: var(--green-bg); color: var(--green); }
+.badge-dirty     { background: var(--red-bg); color: var(--red); }
+.badge-overloaded { background: var(--red-bg); color: var(--red); }
+.badge-healthy   { background: var(--green-bg); color: var(--green); }
+
+/* ── Node Cards Grid ───────────────────────────────────────── */
+.nodes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.node-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px; position: relative;
+  transition: border-color .2s;
+}
+.node-card:hover { border-color: #4a5068; }
+.node-card.overloaded { border-color: var(--red); }
+.node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.node-name { font-weight: 600; font-size: .95rem; }
+.node-meta { font-size: .75rem; color: var(--text-dim); margin-bottom: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+.node-meta span { display: flex; align-items: center; gap: 4px; }
+
+.gauge-row { display: flex; gap: 16px; margin-bottom: 8px; }
+.gauge { flex: 1; }
+.gauge-label { font-size: .7rem; color: var(--text-dim); margin-bottom: 4px; display: flex; justify-content: space-between; }
+.gauge-track { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.gauge-fill { height: 100%; border-radius: 4px; transition: width .6s ease; }
+.gauge-fill.ok   { background: var(--green); }
+.gauge-fill.warn { background: var(--yellow); }
+.gauge-fill.crit { background: var(--red); }
+
+.node-footer { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; font-size: .75rem; color: var(--text-dim); }
+.node-footer span { display: flex; align-items: center; gap: 4px; }
+
+/* ── Zone Cards ────────────────────────────────────────────── */
+.zones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+.zone-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px;
+  transition: border-color .2s;
+}
+.zone-card:hover { border-color: #4a5068; }
+.zone-card.green { border-left: 3px solid var(--green); }
+.zone-card.dirty { border-left: 3px solid var(--red); }
+.zone-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.zone-name { font-weight: 600; font-size: .95rem; }
+.zone-meta { font-size: .78rem; color: var(--text-dim); margin-bottom: 14px; }
+.zone-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.zone-stat { background: var(--surface2); border-radius: 6px; padding: 10px 12px; }
+.zone-stat .zs-label { font-size: .7rem; color: var(--text-dim); }
+.zone-stat .zs-value { font-size: 1.1rem; font-weight: 700; margin-top: 2px; }
+
+/* ── Workload table extras ─────────────────────────────────── */
+.priority-high     { color: var(--yellow); }
+.priority-critical { color: var(--red); font-weight: 700; }
+.priority-normal   { color: var(--text-dim); }
+
+/* ── Arrow ─────────────────────────────────────────────────── */
+.arrow { color: var(--green); font-weight: 700; font-size: 1.1rem; }
+
+/* ── Responsive ────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .summary-bar { grid-template-columns: repeat(2, 1fr); }
+  .tabs { overflow-x: auto; }
+  header { padding: 12px 16px; }
+  .tab-panel { padding: 16px; }
+}
+
+/* ── Reason tooltip ────────────────────────────────────────── */
+.reason-cell { max-width: 280px; }
+.reason-text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: .8rem; line-height: 1.4;
+}
+
+/* ── Empty state ───────────────────────────────────────────── */
+.empty-state {
+  text-align: center; padding: 48px 20px; color: var(--text-dim);
+}
+.empty-state .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+/* ── Carbon pill ───────────────────────────────────────────── */
+.carbon-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: .78rem; font-weight: 600;
+}
+.carbon-pill.saved { color: var(--green); }
+.carbon-pill.cost  { color: var(--red); }
+
+/* ── AI Decision cards ─────────────────────────────────────── */
+.decisions-list { display: flex; flex-direction: column; gap: 16px; }
+.decision-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px; position: relative;
+  border-left: 3px solid var(--purple);
+}
+.decision-card.has-failures { border-left-color: var(--red); }
+.decision-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+.decision-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: .78rem; color: var(--text-dim); margin-bottom: 10px; }
+.decision-meta span { display: flex; align-items: center; gap: 4px; }
+.decision-reasoning {
+  background: var(--surface2); border-radius: 6px; padding: 12px 14px;
+  font-size: .82rem; line-height: 1.5; margin-bottom: 12px;
+  white-space: pre-wrap; max-height: 120px; overflow-y: auto;
+}
+.decision-actions-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px;
+}
+.action-item {
+  background: var(--surface2); border-radius: 6px; padding: 10px 14px; font-size: .8rem;
+}
+.action-item .action-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.action-item .action-workload { font-weight: 600; color: var(--text); }
+.action-item .action-route { color: var(--text-dim); font-size: .75rem; }
+.action-item .action-reason { color: var(--text-dim); font-size: .74rem; margin-top: 4px; line-height: 1.4; }
+.badge-purple { background: #a78bfa18; color: var(--purple); }
+
+/* ── Cluster group header ──────────────────────────────────── */
+.cluster-group { margin-bottom: 24px; }
+.cluster-group h3 { font-size: .85rem; color: var(--text-dim); margin-bottom: 12px;
+  text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>🌿</span> Green Workload AI Dashboard</h1>
+  <div class="live-badge">
+    <div class="live-dot"></div>
+    <span>LIVE</span>
+    <span id="last-update" style="color: var(--text-dim); margin-left: 8px; font-size:.75rem;"></span>
+  </div>
+</header>
+
+<!-- Summary -->
+<div class="summary-bar" id="summary-bar"></div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <div class="tab active" data-tab="migrations">Migration Events</div>
+  <div class="tab" data-tab="movement">Movement Log</div>
+  <div class="tab" data-tab="decisions">AI Decisions</div>
+  <div class="tab" data-tab="nodes">Node Status</div>
+  <div class="tab" data-tab="zones">Zone Energy</div>
+  <div class="tab" data-tab="workloads">Workloads</div>
+</div>
+
+<!-- Tab Panels -->
+<div class="tab-panel active" id="panel-migrations"></div>
+<div class="tab-panel" id="panel-movement"></div>
+<div class="tab-panel" id="panel-decisions"></div>
+<div class="tab-panel" id="panel-nodes"></div>
+<div class="tab-panel" id="panel-zones"></div>
+<div class="tab-panel" id="panel-workloads"></div>
+
+<script>
+// ── Tabs ──────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Helpers ───────────────────────────────────────────────────
+const esc = s => s == null ? '—' : String(s).replace(/</g,'&lt;');
+const fmtNum = (n, d=1) => n == null ? '—' : Number(n).toFixed(d);
+const fmtTime = s => {
+  if (!s) return '—';
+  const d = new Date(s);
+  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+};
+const gaugeClass = pct => pct >= 80 ? 'crit' : pct >= 60 ? 'warn' : 'ok';
+const statusIcon = s => ({completed:'✅',in_progress:'🔄',pending:'⏳',failed:'❌'}[s]||'❓');
+
+// ── Render Summary ────────────────────────────────────────────
+function renderSummary(s) {
+  document.getElementById('summary-bar').innerHTML = `
+    <div class="stat-card blue"><span class="label">Total Migrations</span><span class="value">${s.total_migrations||0}</span></div>
+    <div class="stat-card green"><span class="label">Completed</span><span class="value">${s.completed||0}</span></div>
+    <div class="stat-card yellow"><span class="label">In Progress</span><span class="value">${s.in_progress||0}</span></div>
+    <div class="stat-card red"><span class="label">Failed</span><span class="value">${s.failed||0}</span></div>
+    <div class="stat-card green"><span class="label">Green Zones</span><span class="value">${s.green_zones||0} / ${s.total_zones||0}</span></div>
+    <div class="stat-card purple"><span class="label">Nodes</span><span class="value">${s.total_nodes||0}${s.overloaded_nodes>0?' ⚠️':''}</span></div>
+    <div class="stat-card blue"><span class="label">Workloads</span><span class="value">${s.total_workloads||0}</span></div>
+    <div class="stat-card green"><span class="label">CO₂ Saved (g/kWh)</span><span class="value">${fmtNum(s.total_carbon_saved,0)}</span></div>
+  `;
+}
+
+// ── Render Migrations ─────────────────────────────────────────
+function renderMigrations(migs) {
+  if (!migs.length) {
+    document.getElementById('panel-migrations').innerHTML =
+      '<div class="empty-state"><div class="icon">📋</div><p>No migration events yet.<br>Run the simulation to generate migrations.</p></div>';
+    return;
+  }
+  let html = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>Status</th><th>Workload</th><th>Namespace</th><th>Cluster</th>' +
+    '<th>Source Node</th><th></th><th>Dest Node</th>' +
+    '<th>CO₂ Source</th><th>CO₂ Dest</th><th>Saved</th><th>Duration</th><th>Reason</th>' +
+    '</tr></thead><tbody>';
+  for (const m of migs) {
+    html += `<tr>
+      <td><span class="badge badge-${m.status}">${statusIcon(m.status)} ${m.status}</span></td>
+      <td><strong>${esc(m.workload_name)}</strong></td>
+      <td>${esc(m.namespace)}</td>
+      <td>${esc(m.cluster_name)}</td>
+      <td>${esc(m.source_node_name)}<br><small style="color:var(--text-dim)">${esc(m.source_zone_name)}</small></td>
+      <td class="arrow">→</td>
+      <td>${esc(m.destination_node_name)}<br><small style="color:var(--text-dim)">${esc(m.destination_zone_name)}</small></td>
+      <td>${fmtNum(m.source_carbon_intensity,0)}</td>
+      <td>${fmtNum(m.destination_carbon_intensity,0)}</td>
+      <td><span class="carbon-pill saved">↓ ${fmtNum(m.carbon_savings_estimate,0)}</span></td>
+      <td>${m.duration_seconds != null ? m.duration_seconds + 's' : '—'}</td>
+      <td class="reason-cell"><div class="reason-text">${esc(m.trigger_reason)}</div></td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  document.getElementById('panel-migrations').innerHTML = html;
+}
+
+// ── Render Nodes ──────────────────────────────────────────────
+function renderNodes(nodes) {
+  const groups = {};
+  for (const n of nodes) {
+    const key = n.cluster_name || 'Unknown';
+    (groups[key] = groups[key] || []).push(n);
+  }
+  let html = '';
+  for (const [cluster, cnodes] of Object.entries(groups)) {
+    html += `<div class="cluster-group"><h3>🗄️ ${esc(cluster)}</h3><div class="nodes-grid">`;
+    for (const n of cnodes) {
+      const cpuPct = Number(n.cpu_usage_percent || 0);
+      const memPct = Number(n.memory_usage_percent || 0);
+      const overloaded = n.is_overloaded ? ' overloaded' : '';
+      const zoneBadge = n.is_green
+        ? '<span class="badge badge-green">✅ Green</span>'
+        : '<span class="badge badge-dirty">❌ Dirty</span>';
+      const statusBadge = n.is_overloaded
+        ? '<span class="badge badge-overloaded">⚠️ Overloaded</span>'
+        : '<span class="badge badge-healthy">● Healthy</span>';
+
+      html += `<div class="node-card${overloaded}">
+        <div class="node-header">
+          <span class="node-name">${esc(n.name)}</span>
+          ${statusBadge}
+        </div>
+        <div class="node-meta">
+          <span>📍 ${esc(n.zone_name)} ${zoneBadge}</span>
+          <span>💻 ${esc(n.instance_type)}</span>
+        </div>
+        <div class="gauge-row">
+          <div class="gauge">
+            <div class="gauge-label"><span>CPU</span><span>${fmtNum(cpuPct,1)}%</span></div>
+            <div class="gauge-track"><div class="gauge-fill ${gaugeClass(cpuPct)}" style="width:${cpuPct}%"></div></div>
+          </div>
+          <div class="gauge">
+            <div class="gauge-label"><span>Memory</span><span>${fmtNum(memPct,1)}%</span></div>
+            <div class="gauge-track"><div class="gauge-fill ${gaugeClass(memPct)}" style="width:${memPct}%"></div></div>
+          </div>
+        </div>
+        <div class="node-footer">
+          <span>🔲 ${n.pod_count ?? '—'} pods</span>
+          <span>⬆️ ${fmtNum(n.allocatable_cpu,1)} CPU / ${fmtNum(n.allocatable_memory_gb,0)} GB</span>
+          <span>🌐 ↓${fmtNum(n.network_in_mbps,0)} / ↑${fmtNum(n.network_out_mbps,0)} Mbps</span>
+        </div>
+        <div class="node-footer">
+          <span>🏭 CO₂: ${fmtNum(n.carbon_intensity,0)} g/kWh</span>
+          <span>♻️ Renewable: ${fmtNum(n.renewable_percentage,0)}%</span>
+        </div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+  document.getElementById('panel-nodes').innerHTML = html;
+}
+
+// ── Render Zones ──────────────────────────────────────────────
+function renderZones(zones) {
+  let html = '<div class="zones-grid">';
+  for (const z of zones) {
+    const isGreen = z.is_green;
+    const cls = isGreen ? 'green' : 'dirty';
+    const badge = isGreen
+      ? '<span class="badge badge-green">✅ Green Energy</span>'
+      : '<span class="badge badge-dirty">❌ Fossil Fuel</span>';
+    let sources = '';
+    try {
+      const s = typeof z.energy_sources === 'string' ? JSON.parse(z.energy_sources) : z.energy_sources;
+      if (s) sources = Object.entries(s).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${v}%`).join(', ');
+    } catch(e) {}
+
+    html += `<div class="zone-card ${cls}">
+      <div class="zone-header">
+        <span class="zone-name">${esc(z.name)}</span>
+        ${badge}
+      </div>
+      <div class="zone-meta">${esc(z.display_name)} — ${esc(z.region_display_name)}</div>
+      <div class="zone-stats">
+        <div class="zone-stat">
+          <div class="zs-label">Carbon Intensity</div>
+          <div class="zs-value" style="color:${isGreen?'var(--green)':'var(--red)'}">${fmtNum(z.carbon_intensity,1)} <small>gCO₂/kWh</small></div>
+        </div>
+        <div class="zone-stat">
+          <div class="zs-label">Renewable %</div>
+          <div class="zs-value" style="color:${isGreen?'var(--green)':'var(--red)'}">${fmtNum(z.renewable_percentage,1)}%</div>
+        </div>
+        <div class="zone-stat">
+          <div class="zs-label">Nodes / Workloads</div>
+          <div class="zs-value">${z.node_count} / ${z.workload_count}</div>
+        </div>
+        <div class="zone-stat">
+          <div class="zs-label">Provider</div>
+          <div class="zs-value" style="font-size:.8rem;">${esc(z.energy_provider)}</div>
+        </div>
+      </div>
+      ${sources ? `<div style="margin-top:10px;font-size:.72rem;color:var(--text-dim)">⚡ ${sources}</div>` : ''}
+    </div>`;
+  }
+  html += '</div>';
+  document.getElementById('panel-zones').innerHTML = html;
+}
+
+// ── Render Workloads ──────────────────────────────────────────
+function renderWorkloads(wls) {
+  let html = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>Workload</th><th>Namespace</th><th>Type</th><th>Cluster</th>' +
+    '<th>Node</th><th>Zone</th><th>Zone Status</th><th>Priority</th>' +
+    '<th>CPU Req</th><th>Mem Req</th><th>Migratable</th>' +
+    '</tr></thead><tbody>';
+  for (const w of wls) {
+    const zBadge = w.on_green_zone
+      ? '<span class="badge badge-green">✅ Green</span>'
+      : '<span class="badge badge-dirty">❌ Dirty</span>';
+    const pCls = w.priority === 'critical' ? 'priority-critical' : w.priority === 'high' ? 'priority-high' : 'priority-normal';
+    const migr = w.migration_allowed
+      ? '<span class="badge badge-green">Yes</span>'
+      : '<span class="badge badge-dirty">No</span>';
+    html += `<tr>
+      <td><strong>${esc(w.name)}</strong>${w.stateful?'<br><small style="color:var(--yellow)">⚠ Stateful</small>':''}</td>
+      <td>${esc(w.namespace)}</td>
+      <td>${esc(w.workload_type)}</td>
+      <td>${esc(w.cluster_name)}</td>
+      <td>${esc(w.node_name)}</td>
+      <td>${esc(w.zone_name)}</td>
+      <td>${zBadge}</td>
+      <td><span class="${pCls}">${esc(w.priority)}</span></td>
+      <td>${fmtNum(w.resource_requests_cpu,2)} cores</td>
+      <td>${fmtNum(w.resource_requests_memory_gb,1)} GB</td>
+      <td>${migr}</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  document.getElementById('panel-workloads').innerHTML = html;
+}
+
+// ── Render Movement Log ───────────────────────────────────────
+function renderMovementLog(logs) {
+  if (!logs || !logs.length) {
+    document.getElementById('panel-movement').innerHTML =
+      '<div class="empty-state"><div class="icon">📦</div><p>No workload movements recorded yet.<br>Movements appear here after migrations complete.</p></div>';
+    return;
+  }
+  let html = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>Time</th><th>Workload</th><th>Namespace</th><th>Cluster</th>' +
+    '<th>From Node</th><th></th><th>To Node</th>' +
+    '<th>From Zone</th><th>To Zone</th><th>Migration Ref</th>' +
+    '</tr></thead><tbody>';
+  for (const m of logs) {
+    html += `<tr>
+      <td>${fmtTime(m.moved_at)}</td>
+      <td><strong>${esc(m.workload_name)}</strong></td>
+      <td>${esc(m.namespace)}</td>
+      <td>${esc(m.cluster_name)}</td>
+      <td>${esc(m.source_node_name)}</td>
+      <td class="arrow">→</td>
+      <td>${esc(m.destination_node_name)}</td>
+      <td><span class="badge badge-dirty">${esc(m.source_zone_name)}</span></td>
+      <td><span class="badge badge-green">${esc(m.destination_zone_name)}</span></td>
+      <td style="font-size:.72rem;color:var(--text-dim)">${esc(m.migration_event_id)?.substring(0,8)}…</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  document.getElementById('panel-movement').innerHTML = html;
+}
+
+// ── Render AI Decisions ───────────────────────────────────────
+function renderAiDecisions(decisions) {
+  if (!decisions || !decisions.length) {
+    document.getElementById('panel-decisions').innerHTML =
+      '<div class="empty-state"><div class="icon">🧠</div><p>No AI decisions recorded yet.<br>Decisions appear here after the agent runs.</p></div>';
+    return;
+  }
+  let html = '<div class="decisions-list">';
+  for (const d of decisions) {
+    const hasFails = (d.migrations_failed || 0) > 0;
+    const safetyBadge = d.safety_check_passed
+      ? '<span class="badge badge-green">✅ Safety Passed</span>'
+      : '<span class="badge badge-failed">❌ Safety Failed</span>';
+    const execBadge = d.execution_started
+      ? '<span class="badge badge-in_progress">▶ Executed</span>'
+      : '<span class="badge badge-pending">⏸ Not Executed</span>';
+
+    // Parse actions
+    let actions = [];
+    try {
+      actions = typeof d.recommended_actions === 'string'
+        ? JSON.parse(d.recommended_actions)
+        : (d.recommended_actions || []);
+    } catch(e) {}
+
+    const migTotal = d.migration_count || 0;
+    const migDone = d.migrations_completed || 0;
+    const migFail = d.migrations_failed || 0;
+    let migBadge = '';
+    if (migTotal > 0) {
+      migBadge = `<span class="badge badge-purple">📋 ${migTotal} migration${migTotal>1?'s':''}</span>`;
+      if (migDone > 0) migBadge += ` <span class="badge badge-completed">✅ ${migDone} done</span>`;
+      if (migFail > 0) migBadge += ` <span class="badge badge-failed">❌ ${migFail} failed</span>`;
+    }
+
+    html += `<div class="decision-card${hasFails?' has-failures':''}">
+      <div class="decision-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:.95rem">🧠 ${esc(d.decision_type || 'decision')}</span>
+          ${safetyBadge} ${execBadge} ${migBadge}
+        </div>
+        <span style="font-size:.75rem;color:var(--text-dim)">${esc(d.id)?.substring(0,8)}…</span>
+      </div>
+      <div class="decision-meta">
+        <span>🕐 ${fmtTime(d.timestamp)}</span>
+        <span>🤖 ${esc(d.model_name)}</span>
+        ${d.run_status ? `<span>🏃 Run: ${esc(d.run_status)}</span>` : ''}
+      </div>`;
+
+    // Reasoning
+    if (d.reasoning) {
+      html += `<div class="decision-reasoning">${esc(d.reasoning)}</div>`;
+    }
+
+    // Safety notes
+    if (d.safety_check_notes) {
+      html += `<div style="margin-bottom:12px;font-size:.8rem;padding:8px 12px;background:${d.safety_check_passed?'var(--green-bg)':'var(--red-bg)'};border-radius:6px">
+        <strong>Safety Notes:</strong> ${esc(d.safety_check_notes)}
+      </div>`;
+    }
+
+    // Recommended actions
+    if (actions.length) {
+      html += '<div style="font-size:.75rem;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Recommended Actions</div>';
+      html += '<div class="decision-actions-list">';
+      for (const a of actions) {
+        const wlName = a.workload_name || a.workload || '—';
+        const srcNode = a.source_node_name || a.source_node || '—';
+        const dstNode = a.destination_node_name || a.destination_node || '—';
+        html += `<div class="action-item">
+          <div class="action-head">
+            <span class="action-workload">${esc(wlName)}</span>
+            <span class="badge badge-purple" style="font-size:.68rem">${esc(a.workload_type || '')}</span>
+          </div>
+          <div class="action-route">${esc(srcNode)} <span class="arrow" style="font-size:.85rem">→</span> ${esc(dstNode)}</div>
+          ${a.reason ? `<div class="action-reason">${esc(a.reason)}</div>` : ''}
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
+  }
+  html += '</div>';
+  document.getElementById('panel-decisions').innerHTML = html;
+}
+
+// ── SSE Connection ────────────────────────────────────────────
+function connect() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      renderSummary(data.summary);
+      renderMigrations(data.migrations);
+      renderMovementLog(data.movementLog);
+      renderAiDecisions(data.aiDecisions);
+      renderNodes(data.nodes);
+      renderZones(data.zones);
+      renderWorkloads(data.workloads);
+      document.getElementById('last-update').textContent =
+        'Updated ' + new Date(data.timestamp).toLocaleTimeString();
+    } catch(err) {
+      console.error('Parse error:', err);
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    document.getElementById('last-update').textContent = 'Reconnecting...';
+    setTimeout(connect, 3000);
+  };
+}
+connect();
+</script>
+</body>
+</html>

@@ -258,3 +258,24 @@ class MigrationEvent(Base):
 
     workload: Mapped[Optional["Workload"]] = relationship("Workload", back_populates="migration_events")
     ai_decision: Mapped[Optional["AiDecision"]] = relationship("AiDecision", back_populates="migration_events")
+
+
+class WorkloadMovementLog(Base):
+    __tablename__ = "workload_movement_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, server_default=text("(UUID())"))
+    workload_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("workloads.id", ondelete="SET NULL"))
+    workload_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(200), nullable=False, server_default="default")
+    cluster_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("clusters.id", ondelete="SET NULL"))
+    source_node_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"))
+    source_node_name: Mapped[Optional[str]] = mapped_column(String(200))
+    destination_node_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"))
+    destination_node_name: Mapped[Optional[str]] = mapped_column(String(200))
+    source_zone_name: Mapped[Optional[str]] = mapped_column(String(100))
+    destination_zone_name: Mapped[Optional[str]] = mapped_column(String(100))
+    migration_event_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("migration_events.id", ondelete="SET NULL")
+    )
+    moved_at: Mapped[datetime] = mapped_column(DATETIME(fsp=6), server_default=text("CURRENT_TIMESTAMP(6)"))
+    created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=6), server_default=text("CURRENT_TIMESTAMP(6)"))

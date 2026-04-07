@@ -66,7 +66,7 @@ Pydantic `BaseSettings` loaded from `.env`. Key settings:
 |---------|---------|-------------|
 | `OLLAMA_MODEL` | `llama3.1:8b` | LLM model served by Ollama |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API base |
-| `SCHEDULE_INTERVAL_MINUTES` | `10` | How often the agent evaluates |
+| `SCHEDULE_INTERVAL_SECONDS` | `10` | How often the agent evaluates |
 | `DRY_RUN` | `False` | Simulate migrations without applying |
 | `MIN_RENEWABLE_PCT` | `50.0` | Minimum % renewables to consider a zone "green" |
 | `MAX_CONCURRENT_MIGRATIONS` | `5` | Safety cap on in-flight migrations |

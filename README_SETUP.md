@@ -77,7 +77,7 @@ Key settings in `.env`:
 | `ELECTRICITY_MAPS_API_KEY` | _(empty)_ | Optional — live energy data |
 | `WATTTIME_USERNAME` | _(empty)_ | Optional — live energy data |
 | `WATTTIME_PASSWORD` | _(empty)_ | Optional — live energy data |
-| `SCHEDULE_INTERVAL_MINUTES` | `10` | How often the agent runs |
+| `SCHEDULE_INTERVAL_SECONDS` | `10` | How often the agent runs |
 | `DRY_RUN` | `false` | Set `true` to preview without executing |
 | `MAX_CONCURRENT_MIGRATIONS` | `5` | Safety limit |
 | `MIN_RENEWABLE_PCT` | `50.0` | Minimum % renewable for a zone to be "green" |
@@ -107,7 +107,7 @@ This will:
 python main.py
 ```
 
-The agent will run immediately and then every `SCHEDULE_INTERVAL_MINUTES` minutes.
+The agent will run immediately and then every `SCHEDULE_INTERVAL_SECONDS` minutes.
 
 ### Run a single evaluation cycle
 
