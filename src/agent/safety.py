@@ -19,7 +19,7 @@ class SafetyValidator:
         dest_node_name = action.get("destination_node_name", "")
         workload_type = action.get("workload_type", "Deployment")
 
-        # Find destination node in topology
+        # Find destination node in topology by name
         dest_node = None
         clusters = topology.get("clusters", []) if isinstance(topology, dict) else []
         for cluster in clusters:
@@ -27,8 +27,6 @@ class SafetyValidator:
                 if (
                     node.get("node_name") == dest_node_name
                     or node.get("name") == dest_node_name
-                    or node.get("id") == action.get("destination_node_id")
-                    or node.get("node_id") == action.get("destination_node_id")
                 ):
                     dest_node = node
                     break

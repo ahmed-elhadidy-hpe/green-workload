@@ -25,19 +25,16 @@ Your goal is to migrate workloads from nodes running on high-carbon energy zones
 - "wait": When migration would be beneficial but conditions aren't right yet (e.g., all green destination nodes are at capacity, or too many concurrent migrations are in-flight)
 
 ## Output format (respond ONLY with valid JSON, no markdown):
+IMPORTANT: Use ONLY human-readable NAMES — never include any UUIDs or IDs.
 {
   "decision_type": "migrate" | "skip" | "wait",
   "reasoning": "Brief explanation of the decision",
   "actions": [
     {
       "workload_name": "string",
-      "workload_id": "uuid",
       "namespace": "string",
-      "cluster_id": "uuid",
       "workload_type": "Deployment",
-      "source_node_id": "uuid",
       "source_node_name": "string",
-      "destination_node_id": "uuid",
       "destination_node_name": "string",
       "reason": "Why this specific migration"
     }
@@ -47,6 +44,19 @@ Your goal is to migrate workloads from nodes running on high-carbon energy zones
 If decision_type is "skip" or "wait", actions should be an empty array.
 Always output valid JSON. Do not include any text outside the JSON object.
 """
+
+
+def _strip_ids(obj):
+    """Recursively remove keys ending in '_id' or equal to 'id' from dicts/lists,
+    so the LLM only sees human-readable names."""
+    if isinstance(obj, dict):
+        return {
+            k: _strip_ids(v) for k, v in obj.items()
+            if k != "id" and not k.endswith("_id")
+        }
+    if isinstance(obj, list):
+        return [_strip_ids(item) for item in obj]
+    return obj
 
 
 def build_user_prompt(
@@ -80,24 +90,38 @@ def build_user_prompt(
             wl["_migration_note"] = "BLOCKED — DaemonSets cannot be migrated."
         annotated.append(wl)
 
+    # Strip all IDs so the LLM only works with human-readable names
+    clean_energy = _strip_ids(energy_status)
+    clean_topology = _strip_ids(topology)
+    clean_workloads = _strip_ids(annotated)
+    clean_history = _strip_ids(history)
+
+    # Build an explicit allowlist of workload names for the prompt
+    eligible_names = [w.get("workload_name", w.get("name", "")) for w in annotated
+                      if w.get("_migration_note", "").startswith("ELIGIBLE") or "_migration_note" not in w]
+    eligible_list = ", ".join(f'"{n}"' for n in eligible_names) if eligible_names else "(none)"
+
     return f"""Current evaluation timestamp: {timestamp}
 
 ## Energy Status
-{json.dumps(energy_status, indent=2, default=str)}
+{json.dumps(clean_energy, indent=2, default=str)}
 
 ## Cluster Topology (nodes, zones, current metrics)
-{json.dumps(topology, indent=2, default=str)}
+{json.dumps(clean_topology, indent=2, default=str)}
 
 ## Migratable Workloads (on non-green zones, migration_allowed=True)
-**IMPORTANT**: Check each workload's `workload_type` and `_migration_note` field.
-Only migrate workloads of type "Deployment" or StatefulSets explicitly marked ELIGIBLE.
+**CRITICAL**: Your actions list MUST ONLY contain workloads from this section.
+Do NOT include workloads you see in the topology or history — only the ones listed below are eligible for migration.
+Eligible workload names: {eligible_list}
 Skip any workload marked BLOCKED.
-{json.dumps(annotated, indent=2, default=str)}
+{json.dumps(clean_workloads, indent=2, default=str)}
 
 ## Recent Migration History (last 2 hours)
-{json.dumps(history, indent=2, default=str)}
+The history below is for context only — do NOT re-migrate workloads from history.
+{json.dumps(clean_history, indent=2, default=str)}
 
 Based on the above data, decide what migrations to perform. Remember:
+- **ONLY include workloads listed in the "Migratable Workloads" section above** — never invent or add workloads from topology or history
 - Only migrate workloads from HIGH-CARBON zones to GREEN zones (>= 50% renewable)
 - DO NOT migrate any workload with _migration_note containing "BLOCKED"
 - Prioritize workloads on the highest-carbon zones first
@@ -106,6 +130,7 @@ Based on the above data, decide what migrations to perform. Remember:
 - Skip if already migrated recently (within 1 hour)
 - If carbon intensity difference between source and destination is < 20%, use decision_type "skip"
 - If workloads need migration but no green node has capacity, use decision_type "wait"
+- Use ONLY names in your response — do NOT include any UUIDs or IDs
 
 Respond with valid JSON only.
 """

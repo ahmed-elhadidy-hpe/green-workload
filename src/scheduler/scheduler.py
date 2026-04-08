@@ -13,6 +13,7 @@ _agent: GreenWorkloadAgent | None = None
 
 async def _run_evaluation() -> None:
     """Scheduled callback: run one agent evaluation cycle."""
+    log.info("Scheduled evaluation cycle started")
     global _agent
     if _agent is None:
         _agent = GreenWorkloadAgent()
@@ -43,11 +44,11 @@ async def run_scheduler_forever() -> None:
     scheduler.start()
     log.info(
         "Scheduler started",
-        interval_minutes=settings.SCHEDULE_INTERVAL_SECONDS,
+        interval_seconds=settings.SCHEDULE_INTERVAL_SECONDS,
         dry_run=settings.DRY_RUN,
     )
     # Run once immediately on startup
-    await _run_evaluation()
+    # await _run_evaluation()
     try:
         while True:
             await asyncio.sleep(60)

@@ -77,6 +77,21 @@ class GreenWorkloadAgent:
 
             # 2. Call LLM
             decision = await self._call_llm(energy_status, topology, workloads, history)
+
+            # 2b. Filter out hallucinated workloads not in the migratable list
+            allowed_names = {wl.get("workload_name") for wl in workloads}
+            raw_actions = decision.get("actions", [])
+            if raw_actions:
+                filtered = [a for a in raw_actions if a.get("workload_name") in allowed_names]
+                hallucinated = [a.get("workload_name") for a in raw_actions if a.get("workload_name") not in allowed_names]
+                if hallucinated:
+                    log.warning(
+                        "Dropped hallucinated workloads from LLM response",
+                        hallucinated=hallucinated,
+                        kept=len(filtered),
+                        dropped=len(hallucinated),
+                    )
+                decision["actions"] = filtered
             
             # 3. Record decision
             decision_id = self.repo.record_ai_decision(
@@ -362,15 +377,9 @@ class GreenWorkloadAgent:
             actions.append(
                 {
                     "workload_name": wl.get("workload_name", ""),
-                    "workload_id": wl.get("workload_id", ""),
                     "namespace": wl.get("namespace", "default"),
-                    "cluster_id": wl.get("cluster_id", ""),
                     "workload_type": wl.get("workload_type", "Deployment"),
-                    "source_node_id": wl.get("node_id", ""),
                     "source_node_name": wl.get("node_name", ""),
-                    "destination_node_id": best_node.get(
-                        "node_id", best_node.get("id", "")
-                    ),
                     "destination_node_name": best_node.get(
                         "node_name", best_node.get("name", "")
                     ),
@@ -406,6 +415,16 @@ class GreenWorkloadAgent:
         """Validate and execute each migration action. Returns count of initiated migrations."""
         initiated = 0
         for action in actions:
+            # Resolve human-readable names to database IDs
+            action = self.repo.resolve_action_names(action)
+            log.info(
+                "Action resolved",
+                workload=action.get("workload_name"),
+                workload_id=action.get("workload_id", "")[:12],
+                source_node=action.get("source_node_name"),
+                destination_node=action.get("destination_node_name"),
+            )
+
             valid, reason = self.safety.validate_action(action, topology)
             if not valid:
                 log.warning(
@@ -416,6 +435,13 @@ class GreenWorkloadAgent:
             workload_id = action.get("workload_id", "")
             source_node_id = action.get("source_node_id", "")
             dest_node_id = action.get("destination_node_id", "")
+
+            if not workload_id:
+                log.warning("Skipping action — workload could not be resolved", workload_name=action.get("workload_name"))
+                continue
+            if not dest_node_id:
+                log.warning("Skipping action — destination node could not be resolved", destination_node_name=action.get("destination_node_name"))
+                continue
 
             migration_id = self.repo.record_migration_event(
                 workload_id=workload_id,

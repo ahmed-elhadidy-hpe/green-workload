@@ -252,6 +252,67 @@ class GreenWorkloadRepository:
             log.error("get_migratable_workloads failed", error=str(e))
             return []
 
+    def resolve_action_names(self, action: dict) -> dict:
+        """Resolve human-readable names in an LLM action to database IDs.
+
+        Looks up workload_name, source_node_name, destination_node_name
+        and populates workload_id, source_node_id, destination_node_id,
+        plus cluster_id and annotations from the workload row.
+        Returns a new dict with IDs filled in.
+        """
+        resolved = dict(action)
+        try:
+            with get_db() as db:
+                # Resolve workload by name + namespace
+                wl_name = action.get("workload_name", "")
+                wl_ns = action.get("namespace", "")
+                wl_row = db.execute(
+                    text(
+                        "SELECT id, cluster_id, annotations, workload_type "
+                        "FROM workloads WHERE name = :n"
+                        + (" AND namespace = :ns" if wl_ns else "")
+                        + " LIMIT 1"
+                    ),
+                    {"n": wl_name, "ns": wl_ns} if wl_ns else {"n": wl_name},
+                ).fetchone()
+                if wl_row:
+                    resolved["workload_id"] = wl_row[0]
+                    resolved["cluster_id"] = wl_row[1]
+                    raw_ann = wl_row[2]
+                    if raw_ann:
+                        try:
+                            resolved["annotations"] = json.loads(raw_ann) if isinstance(raw_ann, str) else raw_ann
+                        except Exception:
+                            resolved["annotations"] = {}
+                    else:
+                        resolved["annotations"] = {}
+                    resolved["workload_type"] = wl_row[3] or resolved.get("workload_type", "Deployment")
+                else:
+                    log.warning("resolve_action_names — workload not found", workload_name=wl_name, namespace=wl_ns)
+                    resolved["workload_id"] = ""
+
+                # Resolve source node by name
+                src_name = action.get("source_node_name", "")
+                if src_name:
+                    src_row = db.execute(
+                        text("SELECT id FROM nodes WHERE name = :n LIMIT 1"),
+                        {"n": src_name},
+                    ).fetchone()
+                    resolved["source_node_id"] = src_row[0] if src_row else ""
+
+                # Resolve destination node by name
+                dst_name = action.get("destination_node_name", "")
+                if dst_name:
+                    dst_row = db.execute(
+                        text("SELECT id FROM nodes WHERE name = :n LIMIT 1"),
+                        {"n": dst_name},
+                    ).fetchone()
+                    resolved["destination_node_id"] = dst_row[0] if dst_row else ""
+
+        except Exception as e:
+            log.error("resolve_action_names failed", error=str(e), action=action)
+        return resolved
+
     def upsert_workload(
         self,
         name: str,

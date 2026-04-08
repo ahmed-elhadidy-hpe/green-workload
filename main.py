@@ -15,12 +15,33 @@ import logging
 from config.settings import settings
 
 
+def _trim_timestamp_ms(_logger, _method, event_dict):
+    """Trim timestamp microseconds to milliseconds (6 digits → 3)."""
+    ts = event_dict.get("timestamp", "")
+    if len(ts) > 3 and ts[-4] == ".":
+        pass  # already short
+    elif "." in ts and len(ts.rsplit(".", 1)[-1]) == 6:
+        event_dict["timestamp"] = ts[:-3]
+    return event_dict
+
+
 def _configure_logging() -> None:
     logging.basicConfig(
         format="%(message)s",
         level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     )
     structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.set_exc_info,
+            structlog.processors.TimeStamper(fmt="%m-%d %H:%M:%S.%f", utc=False),
+            _trim_timestamp_ms,
+            structlog.dev.ConsoleRenderer(
+                timestamp_key="timestamp",
+            ),
+        ],
         wrapper_class=structlog.make_filtering_bound_logger(
             getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
         ),
