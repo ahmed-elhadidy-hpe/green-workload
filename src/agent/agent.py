@@ -24,10 +24,20 @@ class GreenWorkloadAgent:
     def __init__(self):
         self.repo = GreenWorkloadRepository()
         self.safety = SafetyValidator(self.repo, settings)
-        self.llm = AsyncOpenAI(
-            base_url=settings.OLLAMA_BASE_URL,
-            api_key="ollama",  # Ollama ignores the key but the SDK requires it
-        )
+        if settings.LLM_PROVIDER == "ollama":
+            self.llm = AsyncOpenAI(
+                base_url=settings.OLLAMA_BASE_URL,
+                api_key="ollama",  # Ollama ignores the key but the SDK requires it
+            )
+            self.model = settings.OLLAMA_MODEL
+            self.url = settings.OLLAMA_BASE_URL
+        elif settings.LLM_PROVIDER == "copilot":
+            self.llm = AsyncOpenAI(
+                base_url=settings.COPILOT_BASE_URL,
+                api_key="dummy",  # Copilot ignores the key but the SDK requires it
+            )
+            self.model = settings.COPILOT_MODEL
+            self.url = settings.COPILOT_BASE_URL
 
     # ------------------------------------------------------------------
     # Main evaluation cycle
@@ -82,8 +92,14 @@ class GreenWorkloadAgent:
             allowed_names = {wl.get("workload_name") for wl in workloads}
             raw_actions = decision.get("actions", [])
             if raw_actions:
-                filtered = [a for a in raw_actions if a.get("workload_name") in allowed_names]
-                hallucinated = [a.get("workload_name") for a in raw_actions if a.get("workload_name") not in allowed_names]
+                filtered = [
+                    a for a in raw_actions if a.get("workload_name") in allowed_names
+                ]
+                hallucinated = [
+                    a.get("workload_name")
+                    for a in raw_actions
+                    if a.get("workload_name") not in allowed_names
+                ]
                 if hallucinated:
                     log.warning(
                         "Dropped hallucinated workloads from LLM response",
@@ -92,7 +108,7 @@ class GreenWorkloadAgent:
                         dropped=len(hallucinated),
                     )
                 decision["actions"] = filtered
-            
+
             # 3. Record decision
             decision_id = self.repo.record_ai_decision(
                 agent_run_id=run_id,
@@ -162,8 +178,8 @@ class GreenWorkloadAgent:
 
         log.info(
             "LLM request — sending prompt to model",
-            model=settings.OLLAMA_MODEL,
-            base_url=settings.OLLAMA_BASE_URL,
+            model=self.model,
+            base_url=self.url,
             system_prompt_length=len(SYSTEM_PROMPT),
             user_prompt_length=len(user_prompt),
             workloads_count=len(workloads),
@@ -173,7 +189,7 @@ class GreenWorkloadAgent:
 
         try:
             response = await self.llm.chat.completions.create(
-                model=settings.OLLAMA_MODEL,
+                model=self.model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -197,7 +213,9 @@ class GreenWorkloadAgent:
             log.info("LLM raw response", raw_response=raw)
 
             finish_reason = response.choices[0].finish_reason
-            decision = self._parse_llm_response(raw, truncated=(finish_reason == "length"))
+            decision = self._parse_llm_response(
+                raw, truncated=(finish_reason == "length")
+            )
 
             log.info(
                 "LLM decision parsed",
@@ -230,7 +248,7 @@ class GreenWorkloadAgent:
 
     def _parse_llm_response(self, raw: str, truncated: bool = False) -> dict:
         """Extract and parse JSON from the LLM response.
-        
+
         If truncated=True (finish_reason was 'length'), attempt to repair
         the JSON by closing open arrays/objects.
         """
@@ -437,10 +455,16 @@ class GreenWorkloadAgent:
             dest_node_id = action.get("destination_node_id", "")
 
             if not workload_id:
-                log.warning("Skipping action — workload could not be resolved", workload_name=action.get("workload_name"))
+                log.warning(
+                    "Skipping action — workload could not be resolved",
+                    workload_name=action.get("workload_name"),
+                )
                 continue
             if not dest_node_id:
-                log.warning("Skipping action — destination node could not be resolved", destination_node_name=action.get("destination_node_name"))
+                log.warning(
+                    "Skipping action — destination node could not be resolved",
+                    destination_node_name=action.get("destination_node_name"),
+                )
                 continue
 
             migration_id = self.repo.record_migration_event(

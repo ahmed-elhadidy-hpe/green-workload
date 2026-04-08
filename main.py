@@ -73,9 +73,15 @@ async def _main(args: argparse.Namespace) -> None:
         await _run_once()
         return
 
+    model=""
+    if settings.LLM_PROVIDER == "ollama":
+        model = settings.OLLAMA_MODEL
+    elif settings.LLM_PROVIDER == "copilot":
+        model = settings.COPILOT_MODEL  
+
     log.info(
         "Starting Green Workload AI scheduler",
-        model=settings.OLLAMA_MODEL,
+        model=model,
         interval=settings.SCHEDULE_INTERVAL_SECONDS,
         dry_run=settings.DRY_RUN,
     )
