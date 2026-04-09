@@ -278,6 +278,48 @@ class GreenWorkloadAgent:
                 except json.JSONDecodeError:
                     pass
 
+            # Try to find multiple JSON objects via brace-counting
+            json_candidates = []
+            depth = 0
+            obj_start = None
+            in_string = False
+            escape_next = False
+            for i, ch in enumerate(raw):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if ch == "\\" and in_string:
+                    escape_next = True
+                    continue
+                if ch == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "{":
+                    if depth == 0:
+                        obj_start = i
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0 and obj_start is not None:
+                        json_candidates.append(raw[obj_start : i + 1])
+                        obj_start = None
+
+            # reverse candidates to prioritize the last complete JSON object
+            # as LLMs append its fixes to the end of the response
+            for i, candidate in enumerate(reversed(json_candidates)):
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict) and "decision_type" in parsed:
+                        log.info(
+                            "LLM response parsed via brace-balanced extraction",
+                            extracted_from=f"candidate #{i+1} of {len(json_candidates)}",
+                        )
+                        return parsed
+                except json.JSONDecodeError:
+                    continue
+
             # If response was truncated, try to repair by closing brackets
             if truncated and start != -1:
                 fragment = raw[start:]
@@ -304,15 +346,30 @@ class GreenWorkloadAgent:
     def _repair_truncated_json(fragment: str) -> dict | None:
         """Try to repair a truncated JSON response by progressively
         removing trailing incomplete elements and closing brackets."""
-        # Try closing with increasingly aggressive truncation
-        for trim_chars in [0, 1, 5, 50, 200, 500, 1000]:
+        # Strategy 1: try trimming back to the last complete }, or ] boundary
+        for boundary in ["},", "}", "],", "]", '"']:
+            idx = fragment.rfind(boundary)
+            if idx > 0:
+                candidate = fragment[: idx + len(boundary)]
+                open_braces = candidate.count("{") - candidate.count("}")
+                open_brackets = candidate.count("[") - candidate.count("]")
+                candidate = candidate.rstrip().rstrip(",")
+                candidate += "]" * open_brackets + "}" * open_braces
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict) and "decision_type" in parsed:
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+
+        # Strategy 2: brute-force trim with increasing chunk sizes
+        for trim_chars in [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]:
             candidate = fragment if trim_chars == 0 else fragment[:-trim_chars]
-            # Count open/close brackets
+            if not candidate:
+                continue
             open_braces = candidate.count("{") - candidate.count("}")
             open_brackets = candidate.count("[") - candidate.count("]")
-            # Remove any trailing comma after trimming
             candidate = candidate.rstrip().rstrip(",")
-            # Close the open brackets
             candidate += "]" * open_brackets + "}" * open_braces
             try:
                 parsed = json.loads(candidate)

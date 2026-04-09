@@ -232,20 +232,20 @@ class GreenWorkloadRepository:
                 for row in rows:
                     wl = dict(row._mapping)
                     # Filter out StatefulSets without the opt-in annotation
-                    if wl.get("workload_type", "").lower() == "statefulset":
-                        annotations = wl.get("annotations") or {}
-                        if isinstance(annotations, str):
-                            try:
-                                annotations = json.loads(annotations)
-                            except Exception:
-                                annotations = {}
-                        if annotations.get("green-workload/migration-allowed") != "true":
-                            log.info(
-                                "Excluding StatefulSet without opt-in annotation",
-                                workload=wl.get("workload_name"),
-                                annotations=annotations,
-                            )
-                            continue
+                    # if wl.get("workload_type", "").lower() == "statefulset":
+                    #     annotations = wl.get("annotations") or {}
+                    #     if isinstance(annotations, str):
+                    #         try:
+                    #             annotations = json.loads(annotations)
+                    #         except Exception:
+                    #             annotations = {}
+                    #     if annotations.get("green-workload/migration-allowed") != "true":
+                    #         log.info(
+                    #             "Excluding StatefulSet without opt-in annotation",
+                    #             workload=wl.get("workload_name"),
+                    #             annotations=annotations,
+                    #         )
+                    #         continue
                     results.append(wl)
                 return results
         except Exception as e:
