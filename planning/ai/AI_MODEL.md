@@ -37,6 +37,11 @@
 | **Gemini 1.5 Flash** | Google AI Studio | Free tier; cloud-only |
 | **Gemini 2.0 Flash** | Google AI Studio | Free tier; very capable; cloud-only |
 
+
+### Alternative Paid Models
+| Model | Provider | Notes |
+|-------|----------|-------|
+|**claude-sonnet-4.6** | copilot | need copilot-api tool to provide OpenAi rest-api head|
 ---
 
 ## Deployment Options
@@ -102,6 +107,31 @@ Groq offers a **free tier** with generous rate limits (14,400 requests/day for L
 from groq import Groq
 
 client = Groq(api_key="gsk_your_key_here")  # Free at console.groq.com
+```
+
+### Option C — Copilot 
+
+You need to have valid subscription or using the free tier.
+You need to install **copilot-api**
+
+##### Install copilot-api
+
+```bash
+npm install -g copilot-api
+```
+
+##### Authenticate your copilot connection 
+
+``` bash
+copilot-api auth
+```
+
+##### Run copilot-api
+
+```bash
+copilot-api start
+
+# Listening on: http://localhost:4141/ (all interfaces)
 ```
 
 ---
