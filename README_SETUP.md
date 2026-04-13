@@ -72,8 +72,11 @@ Key settings in `.env`:
 | `DB_USER` | `root` | MySQL user |
 | `DB_PASSWORD` | _(empty)_ | MySQL password |
 | `DB_NAME` | `GREEN_WORKLOAD_DB` | Database name |
+| `LLM_PROVIDER`|`ollama`| OPENAI compatible model interfacing provider currently supported values are `ollama` `copilot`  |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama API base URL |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Model name |
+|`COPILOT_BASE_URL`|_(empty)_| the OPENAI compatible server created by `copilot-api`|
+|`COPILOT_MODEL`|`claude-sonnet-4.6`| any model supported by your copilot subscription |
 | `ELECTRICITY_MAPS_API_KEY` | _(empty)_ | Optional — live energy data |
 | `WATTTIME_USERNAME` | _(empty)_ | Optional — live energy data |
 | `WATTTIME_PASSWORD` | _(empty)_ | Optional — live energy data |
