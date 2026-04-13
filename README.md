@@ -2,6 +2,8 @@
 
 Autonomous AI system for migrating Kubernetes workloads to green energy zones.
 
+> **👉 Ready to run the demo?** See [DEMO_GUIDE.md](DEMO_GUIDE.md) for the full step-by-step walkthrough — start services, simulate energy waves, and watch the agent make migration decisions live.
+
 ## Repository Structure
 
 ```
@@ -147,6 +149,7 @@ Connects to MySQL, creates the `GREEN_WORKLOAD_DB` database if absent, executes 
 
 | Document | What's Inside |
 |----------|---------------|
+| [DEMO_GUIDE.md](DEMO_GUIDE.md) | **Step-by-step demo** — start services, run simulation waves, read the dashboard |
 | [planning/PROJECT_PLAN.md](planning/PROJECT_PLAN.md) | Problem statement, architecture overview, decision logic, risks, milestones |
 | [planning/db/DB_DESIGN.md](planning/db/DB_DESIGN.md) | All tables with column-by-column descriptions, ERD, retention policy |
 | [planning/db/schema.sql](planning/db/schema.sql) | PostgreSQL DDL (tables, indexes, views, triggers) |

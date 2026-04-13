@@ -5,9 +5,9 @@ Green Workload AI — Migration Trigger Simulation
 Simulates realistic energy and node metric changes across 5 waves that
 create varied conditions for the AI agent:
 
-  Wave 0: Baseline — all zones moderate, no migration needed  → "skip"
-  Wave 1: Carbon gap emerges — dirty zones spike              → "migrate"
-  Wave 2: Green nodes near saturation — limited capacity      → partial "migrate" / "wait"
+  Wave 0: Baseline — all zones moderate, no migration needed   → "skip"
+  Wave 1: Carbon gap emerges — dirty zones spike               → "migrate"
+  Wave 2: Green nodes near saturation — limited capacity       → partial "migrate" / "wait"
   Wave 3: All destinations full — no safe migration possible   → "skip" / "wait"
   Wave 4: Recovery — green capacity returns, dirty spikes      → "migrate"
 
