@@ -1,18 +1,37 @@
 import json
 import asyncio
+import contextlib
+import os
 import random
 from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
 from openai import AsyncOpenAI
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from config.settings import settings
 from src.database.repository import GreenWorkloadRepository
-from src.agent.prompts import SYSTEM_PROMPT, build_user_prompt
+from src.agent.prompts import SYSTEM_PROMPT, AGENTIC_SYSTEM_PROMPT, build_user_prompt
 from src.agent.safety import SafetyValidator
 
 log = structlog.get_logger()
+
+# Read-only MCP tools exposed to the LLM for data gathering.
+# Execution/write tools are called directly by the agent code, not the LLM.
+_LLM_TOOL_ALLOWLIST = {
+    "get_zone_energy_status",
+    "get_all_zones_energy_status",
+    "get_greenest_zones",
+    "get_zone_energy_forecast",
+    "get_cluster_topology",
+    "get_migratable_workloads",
+    "get_migration_history",
+    "get_all_zones_with_energy",
+    "list_nodes",
+    "get_node_metrics",
+}
 
 
 class GreenWorkloadAgent:
@@ -39,6 +58,102 @@ class GreenWorkloadAgent:
             self.model = settings.COPILOT_MODEL
             self.url = settings.COPILOT_BASE_URL
 
+        # MCP state — populated by _connect_mcp_servers during each run cycle
+        self._mcp_sessions: dict[str, ClientSession] = {}
+        self._llm_tools: list[dict] = []       # read-only tools exposed to the LLM
+        self._all_tools: list[dict] = []        # all registered MCP tools
+        self._tool_server_map: dict[str, str] = {}  # tool_name -> server_name
+
+    # ------------------------------------------------------------------
+    # MCP connection management
+    # ------------------------------------------------------------------
+
+    async def _connect_mcp_servers(self, exit_stack: contextlib.AsyncExitStack) -> None:
+        """Spawn MCP server subprocesses and establish client sessions.
+
+        All sessions are registered with *exit_stack* so they are cleaned up
+        automatically when the caller's ``async with`` block exits.
+        """
+        server_configs = {
+            "green_energy": (settings.GREEN_ENERGY_MCP_CMD, settings.GREEN_ENERGY_MCP_ARGS),
+            "internal_db":  (settings.DB_MCP_CMD,            settings.DB_MCP_ARGS),
+            "kubernetes":   (settings.K8S_MCP_CMD,            settings.K8S_MCP_ARGS),
+        }
+
+        self._mcp_sessions = {}
+        self._llm_tools = []
+        self._all_tools = []
+        self._tool_server_map = {}
+
+        for server_name, (cmd, args_str) in server_configs.items():
+            try:
+                params = StdioServerParameters(
+                    command=cmd,
+                    args=args_str.split(),
+                    env={**os.environ},  # pass full parent env so servers can reach the DB
+                )
+                read, write = await exit_stack.enter_async_context(stdio_client(params))
+                session = await exit_stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+                self._mcp_sessions[server_name] = session
+
+                tools_response = await session.list_tools()
+                for tool in tools_response.tools:
+                    self._tool_server_map[tool.name] = server_name
+                    tool_def = {
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description or "",
+                            "parameters": tool.inputSchema,
+                        },
+                    }
+                    self._all_tools.append(tool_def)
+                    if tool.name in _LLM_TOOL_ALLOWLIST:
+                        self._llm_tools.append(tool_def)
+
+                log.info(
+                    "MCP server connected",
+                    server=server_name,
+                    tools=[t.name for t in tools_response.tools],
+                )
+            except Exception as e:
+                log.warning(
+                    "Failed to connect MCP server — will use fallback",
+                    server=server_name,
+                    error=str(e),
+                )
+
+        log.info(
+            "MCP setup complete",
+            servers_connected=len(self._mcp_sessions),
+            llm_tools=len(self._llm_tools),
+            total_tools=len(self._all_tools),
+        )
+
+    async def _call_mcp_tool(self, tool_name: str, arguments: dict) -> str:
+        """Execute a tool via its MCP server and return the result as a JSON string."""
+        server_name = self._tool_server_map.get(tool_name)
+        if not server_name:
+            return json.dumps({"error": f"Unknown MCP tool: {tool_name}"})
+
+        session = self._mcp_sessions.get(server_name)
+        if not session:
+            return json.dumps({"error": f"MCP server '{server_name}' not connected"})
+
+        try:
+            result = await session.call_tool(tool_name, arguments)
+            if result.content:
+                parts = [
+                    c.text if hasattr(c, "text") else str(c)
+                    for c in result.content
+                ]
+                return parts[0] if len(parts) == 1 else json.dumps(parts)
+            return json.dumps({"result": "success"})
+        except Exception as e:
+            log.error("MCP tool call failed", tool=tool_name, error=str(e))
+            return json.dumps({"error": str(e)})
+
     # ------------------------------------------------------------------
     # Main evaluation cycle
     # ------------------------------------------------------------------
@@ -52,82 +167,79 @@ class GreenWorkloadAgent:
         try:
             log.info("Agent cycle started", run_id=run_id)
 
-            # 1. Collect context
-            log.info("Collecting context — energy status, topology, workloads, history")
-            energy_status = self._get_energy_status()
-            topology = self.repo.get_cluster_topology()
-            workloads = self.repo.get_migratable_workloads()
-            history = self.repo.get_migration_history(hours_back=2)
+            async with contextlib.AsyncExitStack() as mcp_stack:
+                # Connect to all MCP servers; sessions stay open for the full cycle
+                await self._connect_mcp_servers(mcp_stack)
 
-            log.info(
-                "Context collected",
-                zones=energy_status.get("count", 0),
-                clusters=len(topology.get("clusters", [])),
-                migratable_workloads=len(workloads),
-                recent_migrations=len(history),
-            )
-            for wl in workloads:
-                log.info(
-                    "  Migratable workload",
-                    name=wl.get("workload_name"),
-                    node=wl.get("node_name"),
-                    zone=wl.get("zone_name"),
-                    renewable_pct=wl.get("renewable_percentage"),
-                    carbon_intensity=wl.get("carbon_intensity"),
-                )
+                # 1. Quick workload check via DB (avoids a full LLM call when idle)
+                workloads = self.repo.get_migratable_workloads()
 
-            if not workloads:
-                log.info("No migratable workloads found, skipping LLM call")
-                self.repo.complete_agent_run(run_id, 0, "completed")
-                return {
-                    "run_id": run_id,
-                    "status": "completed",
-                    "migrations_initiated": 0,
-                }
-
-            # 2. Call LLM
-            decision = await self._call_llm(energy_status, topology, workloads, history)
-
-            # 2b. Filter out hallucinated workloads not in the migratable list
-            allowed_names = {wl.get("workload_name") for wl in workloads}
-            raw_actions = decision.get("actions", [])
-            if raw_actions:
-                filtered = [
-                    a for a in raw_actions if a.get("workload_name") in allowed_names
-                ]
-                hallucinated = [
-                    a.get("workload_name")
-                    for a in raw_actions
-                    if a.get("workload_name") not in allowed_names
-                ]
-                if hallucinated:
-                    log.warning(
-                        "Dropped hallucinated workloads from LLM response",
-                        hallucinated=hallucinated,
-                        kept=len(filtered),
-                        dropped=len(hallucinated),
+                for wl in workloads:
+                    log.info(
+                        "  Migratable workload",
+                        name=wl.get("workload_name"),
+                        node=wl.get("node_name"),
+                        zone=wl.get("zone_name"),
+                        renewable_pct=wl.get("renewable_percentage"),
+                        carbon_intensity=wl.get("carbon_intensity"),
                     )
-                decision["actions"] = filtered
 
-            # 3. Record decision
-            decision_id = self.repo.record_ai_decision(
-                agent_run_id=run_id,
-                decision_type=decision.get("decision_type", "skip"),
-                reasoning=decision.get("reasoning", ""),
-                recommended_actions=decision.get("actions", []),
-                safety_check_passed=True,
-                model_name=settings.OLLAMA_MODEL,
-            )
+                if not workloads:
+                    log.info("No migratable workloads found, skipping LLM call")
+                    self.repo.complete_agent_run(run_id, 0, "completed")
+                    return {
+                        "run_id": run_id,
+                        "status": "completed",
+                        "migrations_initiated": 0,
+                    }
 
-            # 4. Validate and execute actions
-            if decision.get("decision_type") == "migrate":
-                log.info(
-                    "Executing migrations",
-                    action_count=len(decision.get("actions", [])),
+                log.info("Migratable workloads found", count=len(workloads))
+
+                # 2. LLM agentic loop — the LLM calls MCP tools to gather context,
+                #    then outputs a JSON migration decision.
+                decision = await self._call_llm_with_tools(workloads)
+
+                # 2b. Filter out hallucinated workloads not in the migratable list
+                allowed_names = {wl.get("workload_name") for wl in workloads}
+                raw_actions = decision.get("actions", [])
+                if raw_actions:
+                    filtered = [
+                        a for a in raw_actions if a.get("workload_name") in allowed_names
+                    ]
+                    hallucinated = [
+                        a.get("workload_name")
+                        for a in raw_actions
+                        if a.get("workload_name") not in allowed_names
+                    ]
+                    if hallucinated:
+                        log.warning(
+                            "Dropped hallucinated workloads from LLM response",
+                            hallucinated=hallucinated,
+                            kept=len(filtered),
+                            dropped=len(hallucinated),
+                        )
+                    decision["actions"] = filtered
+
+                # 3. Record decision
+                topology = self.repo.get_cluster_topology()
+                decision_id = self.repo.record_ai_decision(
+                    agent_run_id=run_id,
+                    decision_type=decision.get("decision_type", "skip"),
+                    reasoning=decision.get("reasoning", ""),
+                    recommended_actions=decision.get("actions", []),
+                    safety_check_passed=True,
+                    model_name=self.model,
                 )
-                migrations_initiated = await self._execute_actions(
-                    decision.get("actions", []), topology, decision_id
-                )
+
+                # 4. Validate and execute actions (MCP sessions still open)
+                if decision.get("decision_type") == "migrate":
+                    log.info(
+                        "Executing migrations",
+                        action_count=len(decision.get("actions", [])),
+                    )
+                    migrations_initiated = await self._execute_actions(
+                        decision.get("actions", []), topology, decision_id
+                    )
 
         except Exception as e:
             log.error("Agent cycle failed", run_id=run_id, error=str(e))
@@ -159,6 +271,115 @@ class GreenWorkloadAgent:
         except Exception as e:
             log.warning("Could not fetch energy status", error=str(e))
             return {"zones": [], "count": 0}
+
+    async def _call_llm_with_tools(self, workloads: list) -> dict:
+        """Agentic tool-calling loop: the LLM calls read-only MCP tools to gather context,
+        then outputs a JSON migration decision.
+
+        Falls back to ``_call_llm`` (prompt-based) when no MCP tools are available.
+        """
+        if not self._llm_tools:
+            log.warning("No MCP tools available for LLM — falling back to prompt-based call")
+            energy_status = self._get_energy_status()
+            topology = self.repo.get_cluster_topology()
+            history = self.repo.get_migration_history(hours_back=2)
+            return await self._call_llm(energy_status, topology, workloads, history)
+
+        messages: list[dict] = [
+            {"role": "system", "content": AGENTIC_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Current time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                    "Please evaluate the current state of all energy zones and workloads, "
+                    "then decide which migrations (if any) should be performed."
+                ),
+            },
+        ]
+
+        log.info(
+            "LLM agentic loop started",
+            model=self.model,
+            base_url=self.url,
+            available_tools=[t["function"]["name"] for t in self._llm_tools],
+        )
+
+        max_iterations = 15
+        for iteration in range(max_iterations):
+            log.info("LLM tool-calling iteration", iteration=iteration + 1)
+
+            try:
+                response = await self.llm.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=self._llm_tools,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+            except Exception as e:
+                log.error("LLM call failed in agentic loop — falling back to rule-based", error=str(e))
+                energy_status = self._get_energy_status()
+                topology = self.repo.get_cluster_topology()
+                return self._rule_based_fallback(energy_status, topology, workloads)
+
+            msg = response.choices[0].message
+            usage = response.usage
+
+            log.debug(
+                "LLM agentic response",
+                iteration=iteration + 1,
+                finish_reason=response.choices[0].finish_reason,
+                tool_calls=len(msg.tool_calls) if msg.tool_calls else 0,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                completion_tokens=usage.completion_tokens if usage else None,
+            )
+
+            # Append assistant message (serialise tool_calls for the message history)
+            assistant_msg: dict = {"role": "assistant", "content": msg.content}
+            if msg.tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+            messages.append(assistant_msg)
+
+            if not msg.tool_calls:
+                # LLM finished — parse the JSON decision from the final message
+                log.info("LLM agentic loop complete", total_iterations=iteration + 1)
+                log.info("LLM raw response", raw_response=msg.content)
+                return self._parse_llm_response(msg.content or "")
+
+            # Execute each tool call via the appropriate MCP server
+            for tc in msg.tool_calls:
+                tool_name = tc.function.name
+                try:
+                    arguments = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+
+                log.info("LLM calling MCP tool", tool=tool_name, args=arguments)
+                tool_result = await self._call_mcp_tool(tool_name, arguments)
+                log.debug("MCP tool result", tool=tool_name, result=tool_result[:300])
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_result,
+                })
+
+        log.warning("LLM agentic loop hit max iterations — falling back to manual context")
+        energy_status = self._get_energy_status()
+        topology = self.repo.get_cluster_topology()
+        history = self.repo.get_migration_history(hours_back=2)
+        return await self._call_llm(energy_status, topology, workloads, history)
 
     async def _call_llm(
         self,
@@ -568,50 +789,98 @@ class GreenWorkloadAgent:
         return initiated
 
     async def _do_migrate(self, action: dict) -> bool:
-        """
-        Execute the actual K8s migration.
+        """Execute the K8s migration via the Kubernetes MCP server.
 
-        TODO: Call the Kubernetes MCP server to cordon, drain, and
-              reschedule the workload on the destination node.
-
-        Currently simulates the operation with a random delay (5-60s)
-        to mimic real-world migration latency.
+        Calls ``validate_migration_feasibility`` first, then ``execute_migration``.
+        Falls back to a simulated delay when the kubernetes MCP server is not connected.
         """
         workload_name = action.get("workload_name", "unknown")
         dest_node = action.get("destination_node_name", "unknown")
+        namespace = action.get("namespace", "default")
+        workload_type = action.get("workload_type", "Deployment")
+        cluster_id = action.get("cluster_id", "")
 
         if settings.DRY_RUN:
-            log.info(
-                "DRY_RUN: would execute migration",
-                workload=workload_name,
-                dest=dest_node,
-            )
+            log.info("DRY_RUN: would execute migration", workload=workload_name, dest=dest_node)
             return True
 
         log.info(
-            "Migration started — executing K8s migration",
+            "Migration started — calling Kubernetes MCP",
             workload=workload_name,
-            namespace=action.get("namespace"),
+            namespace=namespace,
             destination=dest_node,
-            workload_type=action.get("workload_type"),
+            workload_type=workload_type,
         )
 
-        # Simulate K8s migration latency (5–60 seconds)
+        # Use the K8s MCP server when connected; otherwise fall back to simulation
+        if "kubernetes" in self._mcp_sessions:
+            # 1. Validate feasibility
+            feasibility_raw = await self._call_mcp_tool(
+                "validate_migration_feasibility",
+                {
+                    "cluster_id": cluster_id,
+                    "namespace": namespace,
+                    "workload_name": workload_name,
+                    "workload_type": workload_type,
+                    "destination_node_name": dest_node,
+                },
+            )
+            try:
+                feasibility = json.loads(feasibility_raw)
+            except json.JSONDecodeError:
+                feasibility = {}
+
+            if not feasibility.get("feasible", True):
+                log.warning(
+                    "K8s MCP feasibility check failed — skipping migration",
+                    workload=workload_name,
+                    checks=feasibility.get("checks"),
+                )
+                return False
+
+            # 2. Execute via K8s MCP
+            exec_raw = await self._call_mcp_tool(
+                "execute_migration",
+                {
+                    "cluster_id": cluster_id,
+                    "namespace": namespace,
+                    "workload_name": workload_name,
+                    "workload_type": workload_type,
+                    "destination_node_name": dest_node,
+                },
+            )
+            try:
+                result = json.loads(exec_raw)
+            except json.JSONDecodeError:
+                result = {}
+
+            success = result.get("success", False)
+            if success:
+                log.info(
+                    "Migration executed via K8s MCP",
+                    workload=workload_name,
+                    destination=dest_node,
+                    dry_run=result.get("dry_run", False),
+                )
+            else:
+                log.error(
+                    "K8s MCP migration failed",
+                    workload=workload_name,
+                    error=result.get("error"),
+                )
+            return success
+
+        # Fallback: simulate migration latency when K8s MCP is unavailable
+        log.warning(
+            "Kubernetes MCP not connected — simulating migration",
+            workload=workload_name,
+            destination=dest_node,
+        )
         from_sec, to_sec = settings.SIMULATED_MIGRATION_EXEC_TIME_BETWEEN_SEC
         delay = random.uniform(from_sec, to_sec)
         await asyncio.sleep(delay)
-
-        # TODO: Replace the sleep above with actual K8s MCP call, e.g.:
-        #   result = await self.k8s_mcp.migrate_workload(
-        #       workload_name=workload_name,
-        #       namespace=action.get("namespace"),
-        #       destination_node=dest_node,
-        #       workload_type=action.get("workload_type"),
-        #   )
-        #   return result.success
-
         log.info(
-            "Migration K8s operation finished",
+            "Simulated migration finished",
             workload=workload_name,
             destination=dest_node,
             simulated_delay_s=round(delay, 1),
